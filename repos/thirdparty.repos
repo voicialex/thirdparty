@@ -1,0 +1,17 @@
+repositories:
+  opencv:
+    type: git
+    url: git@github.com:opencv/opencv.git
+    version: 4.13.0
+  curl:
+    type: git
+    url: git@github.com:curl/curl.git
+    version: curl-8_5_0
+  funasr-runtime:
+    type: git
+    url: git@github.com:modelscope/FunASR.git
+    version: v1.2.7
+  rknn-toolkit2:
+    type: git
+    url: git@github.com:airockchip/rknn-toolkit2.git
+    version: master

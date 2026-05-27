@@ -1,0 +1,150 @@
+# Cross-compile FunASR + OpenCV + libcurl for aarch64 (no QEMU, native speed)
+# Usage: docker build --output type=local,dest=output/aarch64/ -f docker/Dockerfile.arm64 .
+ARG PARALLEL_WORKERS=8
+ARG BUILD_TARGETS="opencv libcurl funasr"
+
+# ============================================================
+# Stage 1: Base environment (reuse ros2-core/humble:dev)
+# ============================================================
+FROM ros2-core/humble:dev AS base
+
+ARG BUILD_TARGETS
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libavutil-dev:arm64 libavcodec-dev:arm64 libavformat-dev:arm64 libswresample-dev:arm64 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/toolchain-aarch64.cmake /opt/toolchain-aarch64.cmake
+
+# ============================================================
+# Stage 2: FunASR cross-compile (conditional)
+# ============================================================
+FROM base AS funasr-build
+
+ARG PARALLEL_WORKERS
+ARG BUILD_TARGETS
+WORKDIR /build
+
+RUN if echo "$BUILD_TARGETS" | grep -q "funasr"; then \
+      echo "[INFO] Building FunASR"; \
+    else \
+      echo "[INFO] Skipping FunASR build"; \
+      mkdir -p /output/funasr/bin /output/funasr/lib; \
+      exit 0; \
+    fi
+
+COPY third_party/funasr-runtime/runtime/ /src/
+
+# ONNX Runtime (only needed for FunASR)
+COPY prebuilt/aarch64/onnxruntime /opt/prebuilt/onnxruntime
+
+RUN if echo "$BUILD_TARGETS" | grep -q "funasr"; then \
+      mkdir -p out && cd out && \
+      cmake /src/websocket \
+          -DCMAKE_TOOLCHAIN_FILE=/opt/toolchain-aarch64.cmake \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DONNXRUNTIME_DIR=/opt/prebuilt/onnxruntime \
+          -DENABLE_PORTAUDIO=OFF \
+          -DCMAKE_CXX_FLAGS="-fpermissive" && \
+      make -j${PARALLEL_WORKERS} funasr-wss-server funasr-wss-server-2pass && \
+      mkdir -p /output/funasr/bin /output/funasr/lib && \
+      find . -name "funasr-wss-server*" -type f -executable -exec cp {} /output/funasr/bin/ \; && \
+      find . -name "*.so*" -type f -exec cp {} /output/funasr/lib/ \; && \
+      find . -name "*.so*" -type l -exec cp -P {} /output/funasr/lib/ \; && \
+      ls /output/funasr/bin/ || { echo "ERROR: no funasr binaries built"; ls -la bin/ 2>/dev/null; exit 1; }; \
+    fi
+
+# ============================================================
+# Stage 3: OpenCV cross-compile (conditional, minimal modules)
+# ============================================================
+FROM base AS opencv-build
+
+ARG PARALLEL_WORKERS
+ARG BUILD_TARGETS
+WORKDIR /build
+
+RUN if echo "$BUILD_TARGETS" | grep -q "opencv"; then \
+      echo "[INFO] Building OpenCV"; \
+    else \
+      echo "[INFO] Skipping OpenCV build"; \
+      mkdir -p /output/opencv/lib; \
+      exit 0; \
+    fi
+
+COPY third_party/opencv/ /src/opencv/
+
+RUN if echo "$BUILD_TARGETS" | grep -q "opencv"; then \
+      mkdir -p out && cd out && \
+      cmake /src/opencv \
+          -DCMAKE_TOOLCHAIN_FILE=/opt/toolchain-aarch64.cmake \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=/output/opencv \
+          -DBUILD_LIST=core,imgproc,imgcodecs,objdetect \
+          -DBUILD_SHARED_LIBS=ON \
+          -DWITH_GDAL=OFF -DWITH_GDCM=OFF -DWITH_FFMPEG=OFF \
+          -DWITH_GSTREAMER=OFF -DWITH_V4L=OFF -DWITH_GTK=OFF \
+          -DWITH_QT=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF \
+          -DWITH_IPP=OFF -DWITH_LAPACK=OFF \
+          -DWITH_OPENJPEG=ON -DWITH_PNG=ON -DWITH_JPEG=ON \
+          -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF \
+          -DBUILD_EXAMPLES=OFF -DBUILD_DOCS=OFF \
+          -DBUILD_opencv_python3=OFF \
+          -DBUILD_ZLIB=ON -DBUILD_PNG=ON -DBUILD_OPENJPEG=ON -DBUILD_JPEG=ON \
+          && \
+      make -j${PARALLEL_WORKERS} && \
+      make install; \
+    fi
+
+# ============================================================
+# Stage 4: libcurl cross-compile (conditional, from submodule)
+# ============================================================
+FROM base AS libcurl-build
+
+ARG PARALLEL_WORKERS
+ARG BUILD_TARGETS
+WORKDIR /build
+
+RUN if echo "$BUILD_TARGETS" | grep -q "libcurl"; then \
+      echo "[INFO] Building libcurl"; \
+    else \
+      echo "[INFO] Skipping libcurl build"; \
+      mkdir -p /output/libcurl/lib; \
+      exit 0; \
+    fi
+
+COPY third_party/curl/ /src/curl/
+
+RUN if echo "$BUILD_TARGETS" | grep -q "libcurl"; then \
+      mkdir -p out && cd out && \
+      cmake /src/curl \
+          -DCMAKE_TOOLCHAIN_FILE=/opt/toolchain-aarch64.cmake \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=/output/libcurl \
+          -DBUILD_SHARED_LIBS=ON \
+          -DBUILD_STATIC_LIBS=OFF \
+          -DBUILD_CURL_EXE=OFF \
+          -DBUILD_TESTING=OFF \
+          -DCURL_DISABLE_LDAP=ON \
+          -DCURL_USE_OPENSSL=OFF \
+          -DCURL_USE_GNUTLS=OFF \
+          -DCURL_USE_MBEDTLS=OFF \
+          -DCURL_USE_WOLFSSL=OFF \
+          -DCURL_USE_LIBPSL=OFF \
+          -DCURL_USE_LIBIDN2=OFF \
+          -DUSE_NGHTTP2=OFF \
+          -DCURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+          -DCURL_CA_PATH=/etc/ssl/certs \
+          && \
+      make -j${PARALLEL_WORKERS} && \
+      make install; \
+    fi
+
+# ============================================================
+# Export: merge all outputs
+# ============================================================
+FROM scratch AS export
+COPY --from=funasr-build /output/funasr/ /funasr/
+COPY --from=opencv-build /output/opencv/ /opencv/
+COPY --from=libcurl-build /output/libcurl/ /libcurl/

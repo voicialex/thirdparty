@@ -1,0 +1,15 @@
+# Build outputs
+output/
+
+# External prebuilt deps (user provides for cross-compile)
+prebuilt/
+
+# Third-party: only rknn-toolkit2 is large (5.8GB), rest committed
+third_party/rknn-toolkit2/
+third_party/opencv/data/vec_files/trainingfaces_24-24.vec
+
+# IDE
+.vscode/
+.idea/
+compile_commands.json
+.cache/

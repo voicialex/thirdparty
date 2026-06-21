@@ -11,7 +11,3 @@ repositories:
     type: git
     url: git@github.com:modelscope/FunASR.git
     version: v1.2.7
-  rknn-toolkit2:
-    type: git
-    url: git@github.com:airockchip/rknn-toolkit2.git
-    version: master

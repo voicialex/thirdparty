@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/scripts/common.sh"
 ARCH="$(uname -m)"
 TARGETS=()
 CLEAN=false
+BUILD_ALL=false
 PARALLEL="${PARALLEL_WORKERS:-$(nproc)}"
 
 # ── Usage ────────────────────────────────────────────────────
@@ -20,12 +21,14 @@ Prerequisites:
   ./scripts/update_src.sh             # Sync third-party sources first
 
 Targets:
-  onnxruntime   Download ONNX Runtime (official release)
-  sherpa        Download Sherpa-ONNX (official release)
+  onnxruntime      Download ONNX Runtime (official release)
+  onnxruntime-gpu  Download ONNX Runtime GPU (x86_64 only)
+  sherpa           Download Sherpa-ONNX (official release)
   opencv        Build OpenCV from source (third_party/opencv)
   libcurl       Build libcurl from source (third_party/curl)
   funasr        Build FunASR from source (requires onnxruntime)
   rknn          Extract RKNN runtime (aarch64 only)
+  rkllm         Download RKLLM runtime (aarch64 only)
   ros2          Alias for opencv (ros2_core 只依赖 OpenCV)
   (none)        All of the above
 
@@ -33,6 +36,7 @@ Options:
   -t, --target <arch>   Target arch: x86_64 | arm64 | aarch64 (default: host)
   -j <N>                Parallel workers (default: nproc)
   -c, --clean           Remove output/ and exit
+  --all                 全编译: x86_64 + aarch64 (用于发版)
   -h, --help            Show this help
 
 Examples:
@@ -47,6 +51,9 @@ Examples:
   ./build.sh -t arm64 libcurl         # Only cross-compile libcurl for arm64
   ./build.sh opencv libcurl           # Build both (native, sequential)
 
+  Full build for release:
+  ./build.sh --all                    # x86_64 + aarch64 全编译
+
   Other targets:
   ./build.sh onnxruntime sherpa       # Only download runtime deps
   ./build.sh -c                       # Clean all outputs
@@ -60,8 +67,9 @@ while [[ $# -gt 0 ]]; do
         -t|--target) ARCH="$2"; shift 2 ;;
         -j) PARALLEL="$2"; shift 2 ;;
         -c|--clean) CLEAN=true; shift ;;
+        --all) BUILD_ALL=true; shift ;;
         -h|--help) usage ;;
-        onnxruntime|sherpa|opencv|funasr|rknn|libcurl) TARGETS+=("$1"); shift ;;
+        onnxruntime|onnxruntime-gpu|sherpa|opencv|funasr|rknn|rkllm|libcurl) TARGETS+=("$1"); shift ;;
         ros2) TARGETS+=(opencv); shift ;;
         *) log_err "Unknown argument: $1"; usage ;;
     esac
@@ -75,9 +83,81 @@ if [[ "$CLEAN" == true ]]; then
     exit 0
 fi
 
+# ── 全编译模式 ────────────────────────────────────────────────
+build_all() {
+    local builds=("x86_64" "aarch64")
+    local results=() tarballs=() failed=0
+    local start_all=$SECONDS
+
+    for arch in "${builds[@]}"; do
+        local tb="$SCRIPT_DIR/output/$arch/thirdparty-${arch}.tar.gz"
+
+        echo ""
+        echo "############################################################"
+        echo "## 全编译 [$arch]"
+        echo "############################################################"
+
+        local clean_flag=()
+        [[ "$CLEAN" == true ]] && clean_flag=(-c)
+
+        if bash "$SCRIPT_DIR/build.sh" -t "$arch" "${clean_flag[@]}"; then
+            local sz
+            sz="$(du -sh "$tb" 2>/dev/null | cut -f1)"
+            results+=("  ✅ $arch  $(printf '%6s' "${sz:-?}")")
+            tarballs+=("$tb")
+        else
+            results+=("  ❌ $arch  FAILED")
+            failed=1
+        fi
+    done
+
+    local all_elapsed=$(( SECONDS - start_all ))
+
+    echo ""
+    echo "=========================================="
+    echo " 全编译结果"
+    echo "=========================================="
+    printf '%s\n' "${results[@]}"
+    printf '[OK] 总耗时: %d分%d秒\n' $((all_elapsed / 60)) $((all_elapsed % 60))
+
+    if [[ $failed -eq 1 ]]; then
+        echo ""
+        echo "[WARN] 部分编译失败，请检查上述 ❌ 项。"
+        return 1
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo " 发版操作指引"
+    echo "=========================================="
+    echo ""
+    echo "  tarball 产物:"
+    for tb in "${tarballs[@]}"; do
+        echo "    ${tb#$SCRIPT_DIR/}"
+    done
+    echo ""
+    echo "  创建 GitHub Release 并上传 tarball:"
+    echo ""
+    local tag="v$(date +%Y.%m.%d)"
+    echo "    gh release create \"${tag}\" \\"
+    for tb in "${tarballs[@]}"; do
+        echo "        \"${tb#$SCRIPT_DIR/}\" \\"
+    done
+    echo "        --title \"${tag}\" \\"
+    echo "        --notes \"Release notes\""
+    echo ""
+    echo "  如需指定 tag，替换 \${tag} 即可:"
+    echo "    gh release create \"v2026.06.16\" output/*/thirdparty-*.tar.gz"
+}
+
+if [[ "$BUILD_ALL" == true ]]; then
+    build_all
+    exit $?
+fi
+
 # Default: all targets
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-    TARGETS=(onnxruntime sherpa opencv libcurl funasr rknn)
+    TARGETS=(onnxruntime onnxruntime-gpu sherpa opencv libcurl funasr rknn rkllm)
 fi
 
 # ── Dispatch ─────────────────────────────────────────────────
@@ -90,9 +170,11 @@ if [[ "$ARCH" != "$HOST_ARCH" ]]; then
     # Step 1: Download targets (arch-specific downloads, no Docker needed)
     for target in "${TARGETS[@]}"; do
         case "$target" in
-            onnxruntime) "$SCRIPT_DIR/scripts/build_onnxruntime.sh" "$ARCH" ;;
-            sherpa)      "$SCRIPT_DIR/scripts/build_sherpa.sh" "$ARCH" ;;
+            onnxruntime)      "$SCRIPT_DIR/scripts/build_onnxruntime.sh" "$ARCH" ;;
+            onnxruntime-gpu) "$SCRIPT_DIR/scripts/build_onnxruntime.sh" "$ARCH" --gpu ;;
+            sherpa)           "$SCRIPT_DIR/scripts/build_sherpa.sh" "$ARCH" ;;
             rknn)        ARCH="$ARCH" "$SCRIPT_DIR/scripts/build_rknn.sh" ;;
+            rkllm)       ARCH="$ARCH" "$SCRIPT_DIR/scripts/build_rkllm.sh" ;;
         esac
     done
 
@@ -154,8 +236,9 @@ else
     # Native build path
     for target in "${TARGETS[@]}"; do
         case "$target" in
-            onnxruntime) "$SCRIPT_DIR/scripts/build_onnxruntime.sh" ;;
-            sherpa)      "$SCRIPT_DIR/scripts/build_sherpa.sh" ;;
+            onnxruntime)      "$SCRIPT_DIR/scripts/build_onnxruntime.sh" ;;
+            onnxruntime-gpu) "$SCRIPT_DIR/scripts/build_onnxruntime.sh" --gpu ;;
+            sherpa)           "$SCRIPT_DIR/scripts/build_sherpa.sh" ;;
             opencv)      "$SCRIPT_DIR/scripts/build_opencv.sh" ;;
             libcurl)     "$SCRIPT_DIR/scripts/build_libcurl.sh" ;;
             funasr)
@@ -165,19 +248,22 @@ else
                 fi
                 "$SCRIPT_DIR/scripts/build_funasr.sh"
                 ;;
-            rknn) ARCH="$ARCH" "$SCRIPT_DIR/scripts/build_rknn.sh" ;;
+            rknn)  ARCH="$ARCH" "$SCRIPT_DIR/scripts/build_rknn.sh" ;;
+            rkllm) ARCH="$ARCH" "$SCRIPT_DIR/scripts/build_rkllm.sh" ;;
         esac
     done
 fi
 
-# ── Package tarball ──────────────────────────────────────
-OUTPUT_DIR="$SCRIPT_DIR/output/$ARCH"
-if [[ -d "$OUTPUT_DIR" ]]; then
-    TARBALL="$SCRIPT_DIR/output/$ARCH/thirdparty-${ARCH}.tar.gz"
-    echo "[INFO] 打包 thirdparty-${ARCH}.tar.gz..."
-    tar czf "$SCRIPT_DIR/output/.tmp-tarball.tar.gz" -C "$OUTPUT_DIR" --exclude="thirdparty-${ARCH}.tar.gz" .
-    mv "$SCRIPT_DIR/output/.tmp-tarball.tar.gz" "$TARBALL"
-    ELAPSED=$(( SECONDS - START_TIME ))
-    echo "[OK] 产物: ${TARBALL} ($(du -sh "$TARBALL" | cut -f1))"
-    echo "[OK] 总耗时: $((ELAPSED/60))分$((ELAPSED%60))秒"
+# ── Package tarball (--all 模式下跳过，子构建已各自打包) ──
+if [[ "$BUILD_ALL" == false ]]; then
+    OUTPUT_DIR="$SCRIPT_DIR/output/$ARCH"
+    if [[ -d "$OUTPUT_DIR" ]]; then
+        TARBALL="$SCRIPT_DIR/output/$ARCH/thirdparty-${ARCH}.tar.gz"
+        echo "[INFO] 打包 thirdparty-${ARCH}.tar.gz..."
+        tar czf "$SCRIPT_DIR/output/.tmp-tarball.tar.gz" -C "$OUTPUT_DIR" --exclude="thirdparty-${ARCH}.tar.gz" .
+        mv "$SCRIPT_DIR/output/.tmp-tarball.tar.gz" "$TARBALL"
+        ELAPSED=$(( SECONDS - START_TIME ))
+        echo "[OK] 产物: ${TARBALL} ($(du -sh "$TARBALL" | cut -f1))"
+        echo "[OK] 总耗时: $((ELAPSED/60))分$((ELAPSED%60))秒"
+    fi
 fi

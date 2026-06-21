@@ -13,6 +13,7 @@ usage() {
 用法: ./scripts/update_src.sh [OPTIONS]
 
 从 repos/thirdparty.repos 同步源码到 third_party/。
+同步后删除 .git，源码作为普通文件纳入主仓库管理。
 
 选项:
   -c, --clean   删除 third_party/ 并重新克隆
@@ -34,10 +35,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ensure_vcstool() {
-    command -v vcs &>/dev/null || {
-        echo "[INFO] 安装 vcstool..."
-        pip3 install vcstool
-    }
+    command -v vcs &>/dev/null || pip3 install vcstool
 }
 
 get_wanted_repos() {
@@ -60,23 +58,10 @@ remove_stale_repos() {
 
 import_repos() {
     echo "[INFO] 同步源码..."
-    local output
-    output=$(vcs import --skip-existing "$SRC_DIR" < "$REPOS_FILE" 2>&1)
-
-    local current=""
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^===\ .*\/([a-zA-Z0-9_./-]+)\ \(git\)\ ===$ ]]; then
-            current="${BASH_REMATCH[1]}"
-        elif [[ "$line" == *"Skipped existing"* ]]; then
-            echo "  [SKIP] $current"
-        elif [[ "$line" == *"Cloning"* || "$line" == *"Checked out"* ]]; then
-            echo "  [NEW] $current"
-        fi
-    done <<< "$output"
+    vcs import --skip-existing "$SRC_DIR" < "$REPOS_FILE"
 }
 
-postprocess() {
-    # 清理嵌套 .git 目录，避免干扰主仓库
+postprocess_src() {
     find "$SRC_DIR" -name .git -type d -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
@@ -89,13 +74,13 @@ if [[ "$CLEAN" == true ]]; then
     rm -rf "$SRC_DIR"
 fi
 
-ensure_vcstool
 mkdir -p "$SRC_DIR"
+ensure_vcstool
 
 WANTED=$(get_wanted_repos)
 remove_stale_repos "$WANTED"
 import_repos
-postprocess
+postprocess_src
 
 # 验证
 missing=0
@@ -109,3 +94,4 @@ done <<< "$WANTED"
 
 COUNT=$(echo "$WANTED" | grep -c . || true)
 echo "[OK] 已同步 $COUNT 个仓库到 third_party/"
+echo "请 git add third_party/ && git commit"

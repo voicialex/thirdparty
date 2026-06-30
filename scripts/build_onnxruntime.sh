@@ -62,7 +62,9 @@ log_stage "Downloading $LABEL ($ARCH)"
 # ── Download + extract ───────────────────────────────────────
 TMP_DIR="$PROJECT_DIR/output/.tmp"
 mkdir -p "$TMP_DIR"
-TMP_FILE="$TMP_DIR/onnxruntime$([ "$GPU" == true ] && echo '-gpu')-${ARCH}.tgz"
+GPU_SUFFIX=""
+[[ "$GPU" == true ]] && GPU_SUFFIX="-gpu"
+TMP_FILE="$TMP_DIR/onnxruntime${GPU_SUFFIX}-${ARCH}.tgz"
 
 download "$ONNXRT_URL" "$TMP_FILE" || { log_err "Download failed"; exit 1; }
 

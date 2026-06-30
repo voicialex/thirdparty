@@ -11,7 +11,8 @@ OUTPUT_DIR="${SCRIPT_DIR}/../output/${ARCH}/rkllm"
 
 # ── Version ─────────────────────────────────────────────────
 RKLLM_VERSION="v1.2.3"
-RKLLM_BASE="https://raw.githubusercontent.com/airockchip/rknn-llm/${RKLLM_VERSION}/rkllm-runtime/Linux/librkllm_api"
+RKLLM_TAG="release-v1.2.3"
+RKLLM_BASE="https://raw.githubusercontent.com/airockchip/rknn-llm/${RKLLM_TAG}/rkllm-runtime/Linux/librkllm_api"
 
 if [[ "$ARCH" != "aarch64" ]]; then
     log_skip "RKLLM (${ARCH}) — only available for aarch64"
